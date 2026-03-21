@@ -1,59 +1,351 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Camera = workspace.CurrentCamera
+local Workspace = game:GetService("Workspace")
+local TextChatService = game:GetService("TextChatService")
 
-local LocalPlayer = Players.LocalPlayer
-local Running = false
-local Strength = 1 -- maior = mais forte
-local LockPart = "Head"
-local LockedPart = nil
+local localPlayer = Players.LocalPlayer
 
-local function getClosest()
-	local closest, dist = nil, math.huge
-	for _, p in pairs(Players:GetPlayers()) do
-		if p ~= LocalPlayer and p.Character then
-			local part = p.Character:FindFirstChild(LockPart)
-			local hum = p.Character:FindFirstChildOfClass("Humanoid")
-			if part and hum and hum.Health > 0 then
-				local pos, on = Camera:WorldToViewportPoint(part.Position)
-				if on then
-					local d = (UserInputService:GetMouseLocation() - Vector2.new(pos.X, pos.Y)).Magnitude
-					if d < dist then
-						dist, closest = d, part
-					end
-				end
-			end
-		end
-	end
-	return closest
+local CFG = {
+    enabled = true,
+    toggleKey = Enum.KeyCode.U,
+    updateInterval = 0,
+    textSize = 14,
+    maxDistance = 999999999,
+    seekerTag = "Seeker",
+    colorSeeker = Color3.fromRGB(255, 80, 80),
+    colorHider = Color3.fromRGB(80, 200, 255),
+    colorNPC = Color3.fromRGB(200, 160, 255),
+    distClose = 50,
+    distFar = 300,
+    showRole = true,
+    showHP = true,
+    showDistance = true,
+    showArrow = true,
+}
+
+local espObjects = {}
+local accumulator = 0
+local LiveFolder = Workspace:FindFirstChild("Live")
+
+local function hpColor(pct)
+    if pct > 0.6 then return Color3.fromRGB(80, 220, 80)
+    elseif pct > 0.3 then return Color3.fromRGB(255, 180, 40)
+    else return Color3.fromRGB(255, 60, 60)
+    end
 end
 
-RunService.RenderStepped:Connect(function()
-	if not Running then return end
+local function distColor(dist)
+    local t = math.clamp((dist - CFG.distClose) / (CFG.distFar - CFG.distClose), 0, 1)
+    return Color3.fromRGB(
+        math.floor(80 + t * 175),
+        math.floor(220 - t * 160),
+        80
+    )
+end
 
-	if not LockedPart then
-		LockedPart = getClosest()
-	end
-	if not LockedPart then return end
+local function getHead(model)
+    return model:FindFirstChild("Head") or model:FindFirstChildWhichIsA("BasePart")
+end
 
-	local pos = Camera:WorldToViewportPoint(LockedPart.Position)
-	mousemoverel(
-		(pos.X - UserInputService:GetMouseLocation().X) * Strength,
-		(pos.Y - UserInputService:GetMouseLocation().Y) * Strength
-	)
+local function getRoot(model)
+    return model:FindFirstChild("HumanoidRootPart") or model:FindFirstChildWhichIsA("BasePart")
+end
+
+local function getHealth(model)
+    local hum = model and model:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil, nil end
+    return hum.Health, hum.MaxHealth
+end
+
+local function isSeeker(model)
+    if model:GetAttribute("Role") == CFG.seekerTag then return true end
+    if model:FindFirstChild(CFG.seekerTag) then return true end
+    local player = Players:GetPlayerFromCharacter(model)
+    if player and player:GetAttribute("Role") == CFG.seekerTag then return true end
+    return false
+end
+
+local function isDead(model)
+    local hp, maxHp = getHealth(model)
+    return hp and maxHp and maxHp > 0 and hp <= 0
+end
+
+local function newLabel(parent, size, yOffset, color)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, size + 2)
+    l.Position = UDim2.new(0, 0, 0, yOffset)
+    l.BackgroundTransparency = 1
+    l.TextColor3 = color
+    l.TextStrokeTransparency = 0.4
+    l.Font = Enum.Font.SourceSansBold
+    l.TextSize = size
+    l.TextXAlignment = Enum.TextXAlignment.Center
+    l.Parent = parent
+    return l
+end
+
+local function newArrow(parent)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(0, 20, 0, 20)
+    l.AnchorPoint = Vector2.new(0.5, 0.5)
+    l.BackgroundTransparency = 1
+    l.TextColor3 = Color3.fromRGB(255, 255, 255)
+    l.TextStrokeTransparency = 0.3
+    l.Font = Enum.Font.SourceSansBold
+    l.TextSize = 20
+    l.Text = "▶"
+    l.Visible = false
+    l.Parent = parent
+    return l
+end
+
+local function updateArrow(arrow, worldPos)
+    if not arrow then return end
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+    
+    local vpSize = camera.ViewportSize
+    local cx, cy = vpSize.X / 2, vpSize.Y / 2
+    local screenPos, onScreen = camera:WorldToViewportPoint(worldPos)
+    
+    if onScreen and screenPos.Z > 0 then
+        arrow.Visible = false
+        return
+    end
+    
+    local dx = screenPos.X - cx
+    local dy = screenPos.Y - cy
+    local angle = math.atan2(dy, dx)
+    local margin = 30
+    local rx = cx - margin
+    local ry = cy - margin
+    local cos, sin = math.cos(angle), math.sin(angle)
+    local scale = math.min(
+        math.abs(cos) > 0.001 and math.abs(rx / cos) or math.huge,
+        math.abs(sin) > 0.001 and math.abs(ry / sin) or math.huge
+    )
+    
+    arrow.Position = UDim2.new(0, cx + cos * scale, 0, cy + sin * scale)
+    arrow.Rotation = math.deg(angle)
+    arrow.Visible = true
+end
+
+local function createESP(model, colorOverride)
+    if not model or espObjects[model] then return end
+    local head = getHead(model)
+    if not head then return end
+
+    local nameColor = colorOverride or (isSeeker(model) and CFG.colorSeeker) or CFG.colorHider
+
+    local lineH = CFG.textSize + 4
+    local lines = 1
+    if CFG.showHP then lines += 1 end
+    if CFG.showDistance then lines += 1 end
+    local bbHeight = lines * lineH + 8
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 190, 0, bbHeight)
+    bb.StudsOffset = Vector3.new(0, 3.2, 0)
+    bb.AlwaysOnTop = true
+    bb.MaxDistance = CFG.maxDistance
+    bb.Adornee = head
+    bb.Parent = head
+
+    local y = 2
+    local nameLbl = newLabel(bb, CFG.textSize, y, nameColor)
+    y += lineH
+    local hpLbl = newLabel(bb, CFG.textSize - 1, y, Color3.fromRGB(80, 220, 80))
+    y += lineH
+    local distLbl = newLabel(bb, CFG.textSize - 2, y, Color3.fromRGB(200, 200, 200))
+
+    local arrow = nil
+    if CFG.showArrow then
+        local screenGui = localPlayer:FindFirstChild("PlayerGui")
+        if screenGui then
+            local arrowGui = screenGui:FindFirstChild("ESP_Arrows")
+            if not arrowGui then
+                arrowGui = Instance.new("ScreenGui")
+                arrowGui.Name = "ESP_Arrows"
+                arrowGui.ResetOnSpawn = false
+                arrowGui.Parent = screenGui
+            end
+            arrow = newArrow(arrowGui)
+        end
+    end
+
+    espObjects[model] = {
+        gui = bb,
+        nameLbl = nameLbl,
+        hpLbl = hpLbl,
+        distLbl = distLbl,
+        arrow = arrow,
+        color = nameColor,
+    }
+end
+
+local function tryCreateESP(model, colorOverride)
+    task.spawn(function()
+        for _ = 1, 50 do
+            if model and model.Parent then
+                if getHead(model) then
+                    createESP(model, colorOverride)
+                    return
+                end
+            else
+                return
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function removeESP(model)
+    local esp = espObjects[model]
+    if not esp then return end
+    pcall(function() if esp.gui then esp.gui:Destroy() end end)
+    pcall(function() if esp.arrow then esp.arrow:Destroy() end end)
+    espObjects[model] = nil
+end
+
+local function updateAll()
+    -- Se estiver desligado, esconde tudo e aborta
+    if not CFG.enabled then
+        for _, esp in pairs(espObjects) do
+            if esp.gui then esp.gui.Enabled = false end
+            if esp.arrow then esp.arrow.Visible = false end
+        end
+        return
+    end
+
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+    local camPos = camera.CFrame.Position
+
+    -- Loop único e eficiente para atualizar os objetos
+    for model, esp in pairs(espObjects) do
+        -- Se o modelo sumiu do mapa ou foi destruído, remove o ESP e limpa a memória
+        if not model or not model.Parent or not model:FindFirstChild("HumanoidRootPart") then
+            removeESP(model)
+            continue
+        end
+
+        local root = model.HumanoidRootPart
+        local dist = (camPos - root.Position).Magnitude
+
+        -- Se estiver morto ou longe demais, apenas esconde a UI
+        if isDead(model) or dist > CFG.maxDistance then
+            esp.gui.Enabled = false
+            if esp.arrow then esp.arrow.Visible = false end
+            continue
+        end
+
+        esp.gui.Enabled = true
+
+        local displayName = model.Name
+        local player = Players:GetPlayerFromCharacter(model)
+        if player then displayName = player.Name end
+
+        local roleTag = (CFG.showRole and isSeeker(model)) and " [SEEKER]" or ""
+
+        esp.nameLbl.Text = displayName .. roleTag
+        esp.nameLbl.TextColor3 = esp.color
+
+        if CFG.showHP then
+            local hp, maxHp = getHealth(model)
+            if hp and maxHp and maxHp > 0 then
+                esp.hpLbl.Text = math.floor(hp) .. " / " .. math.floor(maxHp)
+                esp.hpLbl.TextColor3 = hpColor(hp / maxHp)
+            else
+                esp.hpLbl.Text = "HP ?"
+                esp.hpLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+            end
+            esp.hpLbl.Visible = true
+        else
+            esp.hpLbl.Visible = false
+        end
+
+        if CFG.showDistance then
+            esp.distLbl.Text = math.floor(dist + 0.5) .. " studs"
+            esp.distLbl.TextColor3 = distColor(dist)
+            esp.distLbl.Visible = true
+        else
+            esp.distLbl.Visible = false
+        end
+
+        if CFG.showArrow and esp.arrow then
+            updateArrow(esp.arrow, root.Position + Vector3.new(0, 3, 0))
+        end
+    end
+end
+
+local function sendNotification(text, color)
+    -- Tenta usar o TextChatService (Jogos Modernos)
+    local channels = TextChatService:FindFirstChild("TextChannels")
+    if channels and channels:FindFirstChild("RBXSystem") then
+        channels.RBXSystem:DisplaySystemMessage("<font color='#" .. color:ToHex() .. "'>" .. text .. "</font>")
+        return
+    end
+    
+    -- Fallback para Legacy Chat (Jogos Antigos)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("ChatMakeSystemMessage", {
+            Text = text,
+            Color = color,
+            Font = Enum.Font.SourceSansBold,
+            FontSize = Enum.FontSize.Size18,
+        })
+    end)
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == CFG.toggleKey then
+        CFG.enabled = not CFG.enabled
+        local state = CFG.enabled and "✔ ATIVADO" or "✖ DESATIVADO"
+        local color = CFG.enabled and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(255, 80, 80)
+        
+        sendNotification("[ESP] " .. state, color)
+    end
 end)
 
-UserInputService.InputBegan:Connect(function(i)
-	if i.KeyCode == Enum.KeyCode.T then
-		Running = true
-		LockedPart = nil
-	end
+local function setupPlayer(p)
+    if p == localPlayer then return end
+
+    if p.Character then
+        tryCreateESP(p.Character)
+    end
+
+    p.CharacterAdded:Connect(function(char)
+        tryCreateESP(char)
+    end)
+
+    p.CharacterRemoving:Connect(removeESP)
+end
+
+for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+Players.PlayerRemoving:Connect(function(p)
+    if p.Character then removeESP(p.Character) end
 end)
 
-UserInputService.InputEnded:Connect(function(i)
-	if i.KeyCode == Enum.KeyCode.T then
-		Running = false
-		LockedPart = nil
-	end
+if LiveFolder then
+    for _, obj in ipairs(LiveFolder:GetChildren()) do
+        tryCreateESP(obj, CFG.colorNPC)
+    end
+    LiveFolder.ChildAdded:Connect(function(obj)
+        tryCreateESP(obj, CFG.colorNPC)
+    end)
+    LiveFolder.ChildRemoved:Connect(removeESP)
+end
+
+RunService.Heartbeat:Connect(function(dt)
+    accumulator += dt
+    if accumulator >= CFG.updateInterval then
+        accumulator = 0
+        local ok, err = pcall(updateAll)
+        if not ok then warn("[ESP ERRO]:", err) end
+    end
 end)
