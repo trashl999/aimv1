@@ -1,5 +1,4 @@
 local Players = game:GetService("Players")
-
 local localPlayer = Players.LocalPlayer
 
 local GREEN = Color3.fromRGB(0, 255, 80)
@@ -10,47 +9,16 @@ local REFRESH_INTERVAL = 0.5
 local highlights = {}
 local playerConnections = {}
 
-local function getOrCreateHighlight(player)
-	if highlights[player] and highlights[player].Parent then
-		return highlights[player]
-	end
-
+local function createHighlight(character)
 	local highlight = Instance.new("Highlight")
-	highlight.Name = "GreenESP_" .. player.UserId
-	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	highlight.FillColor = GREEN
 	highlight.FillTransparency = FILL_TRANSPARENCY
 	highlight.OutlineColor = GREEN
 	highlight.OutlineTransparency = OUTLINE_TRANSPARENCY
-	highlight.Enabled = true
-
-	-- Fica fora do personagem, portanto não é destruído no respawn
-	highlight.Parent = workspace
-	highlights[player] = highlight
-
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Adornee = character
+	highlight.Parent = character
 	return highlight
-end
-
-local function updatePlayerHighlight(player, character)
-	if player == localPlayer then
-		return
-	end
-
-	local highlight = getOrCreateHighlight(player)
-
-	if character and character.Parent then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-		if humanoid then
-			highlight.Adornee = character
-			highlight.Enabled = true
-			return
-		end
-	end
-
-	-- Remove o alvo antigo durante a morte ou carregamento
-	highlight.Adornee = nil
-	highlight.Enabled = false
 end
 
 local function removePlayer(player)
@@ -58,94 +26,52 @@ local function removePlayer(player)
 		highlights[player]:Destroy()
 		highlights[player] = nil
 	end
-
+	
 	if playerConnections[player] then
 		for _, connection in ipairs(playerConnections[player]) do
 			connection:Disconnect()
 		end
-
 		playerConnections[player] = nil
 	end
+end
+
+local function onCharacterAdded(player, character)
+	if player == localPlayer then
+		return
+	end
+	
+	if highlights[player] then
+		highlights[player]:Destroy()
+	end
+	
+	highlights[player] = createHighlight(character)
 end
 
 local function watchPlayer(player)
 	if player == localPlayer then
 		return
 	end
-
-	removePlayer(player)
-
-	local highlight = getOrCreateHighlight(player)
-	highlight.Adornee = nil
-	highlight.Enabled = false
-
+	
 	local connections = {}
 	playerConnections[player] = connections
-
+	
 	table.insert(connections, player.CharacterAdded:Connect(function(character)
-		-- Aguarda o modelo terminar de carregar
-		local humanoid = character:WaitForChild("Humanoid", 5)
-
-		if humanoid and player.Parent then
-			updatePlayerHighlight(player, character)
-		end
+		onCharacterAdded(player, character)
 	end))
-
-	table.insert(connections, player.CharacterRemoving:Connect(function(character)
-		local currentHighlight = highlights[player]
-
-		if currentHighlight and currentHighlight.Adornee == character then
-			currentHighlight.Adornee = nil
-			currentHighlight.Enabled = false
-		end
-	end))
-
-	-- Trata personagens que já estavam carregados
+	
 	if player.Character then
-		task.spawn(function()
-			updatePlayerHighlight(player, player.Character)
-		end)
+		onCharacterAdded(player, player.Character)
 	end
 end
 
--- Inicializa jogadores atuais
 for _, player in ipairs(Players:GetPlayers()) do
 	watchPlayer(player)
 end
 
--- Atualiza novos jogadores
 Players.PlayerAdded:Connect(function(player)
 	watchPlayer(player)
 end)
 
--- Limpa jogadores que saíram
 Players.PlayerRemoving:Connect(function(player)
 	removePlayer(player)
-end)
-
--- Verificação leve de segurança para respawns e carregamento atrasado
-task.spawn(function()
-	while true do
-		task.wait(REFRESH_INTERVAL)
-
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player ~= localPlayer then
-				local character = player.Character
-				local highlight = highlights[player]
-
-				if not highlight or not highlight.Parent then
-					watchPlayer(player)
-				elseif character and character.Parent then
-					if highlight.Adornee ~= character then
-						updatePlayerHighlight(player, character)
-					end
-				else
-					if highlight.Adornee ~= nil then
-						highlight.Adornee = nil
-						highlight.Enabled = false
-					end
-				end
-			end
-		end
-	end
 end)
