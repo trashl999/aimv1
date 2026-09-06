@@ -1,6 +1,3 @@
--- LockOn.client.lua
--- Mecânica legítima de lock-on para uma experiência própria
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -8,16 +5,14 @@ local RunService = game:GetService("RunService")
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- Configurações
 local FOV_RADIUS = 999
-local CAMERA_SMOOTHNESS = 1
+local CAMERA_SMOOTHNESS = 0.15
 local REQUIRE_LINE_OF_SIGHT = true
-local LOCK_BIND_NAME = "OwnGameLockOnCamera"
+local LOCK_BIND_NAME = "LockOnCamera"
 
 local holdingM2 = false
 local currentTarget = nil
 
--- Interface do FOV: fica sempre visível
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "LockOnFOV"
 screenGui.ResetOnSpawn = false
@@ -32,7 +27,6 @@ fovCircle.BackgroundTransparency = 1
 fovCircle.Parent = screenGui
 
 local circleStroke = Instance.new("UIStroke")
-circleStroke.Name = "GreenFOVStroke"
 circleStroke.Color = Color3.fromRGB(0, 255, 80)
 circleStroke.Thickness = 2
 circleStroke.Transparency = 0.05
@@ -44,10 +38,7 @@ circleCorner.Parent = fovCircle
 
 local function updateFOVPosition()
 	local viewportSize = camera.ViewportSize
-	fovCircle.Position = UDim2.fromOffset(
-		viewportSize.X / 2,
-		viewportSize.Y / 2
-	)
+	fovCircle.Position = UDim2.fromOffset(viewportSize.X / 2, viewportSize.Y / 2)
 end
 
 local function getHead(character)
@@ -56,7 +47,7 @@ end
 
 local function isAlive(character)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	return humanoid ~= nil and humanoid.Health > 0
+	return humanoid and humanoid.Health > 0
 end
 
 local function hasLineOfSight(targetHead)
@@ -69,21 +60,14 @@ local function hasLineOfSight(targetHead)
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {
-		localPlayer.Character,
-		targetHead.Parent
-	}
+	raycastParams.FilterDescendantsInstances = {localPlayer.Character, targetHead.Parent}
 
-	local result = workspace:Raycast(origin, direction, raycastParams)
-	return result == nil
+	return workspace:Raycast(origin, direction, raycastParams) == nil
 end
 
 local function findBestTarget()
 	local viewportSize = camera.ViewportSize
-	local screenCenter = Vector2.new(
-		viewportSize.X / 2,
-		viewportSize.Y / 2
-	)
+	local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
 
 	local bestTarget = nil
 	local bestScreenDistance = math.huge
@@ -97,18 +81,10 @@ local function findBestTarget()
 				local screenPosition, visible = camera:WorldToViewportPoint(head.Position)
 
 				if visible and screenPosition.Z > 0 then
-					local targetScreenPosition = Vector2.new(
-						screenPosition.X,
-						screenPosition.Y
-					)
+					local targetScreenPosition = Vector2.new(screenPosition.X, screenPosition.Y)
+					local distanceFromCenter = (targetScreenPosition - screenCenter).Magnitude
 
-					local distanceFromCenter = (
-						targetScreenPosition - screenCenter
-					).Magnitude
-
-					if distanceFromCenter <= FOV_RADIUS
-						and distanceFromCenter < bestScreenDistance
-						and hasLineOfSight(head) then
+					if distanceFromCenter <= FOV_RADIUS and distanceFromCenter < bestScreenDistance and hasLineOfSight(head) then
 						bestScreenDistance = distanceFromCenter
 						bestTarget = head
 					end
@@ -121,10 +97,7 @@ local function findBestTarget()
 end
 
 local function validTarget(targetHead)
-	return targetHead
-		and targetHead.Parent
-		and isAlive(targetHead.Parent)
-		and hasLineOfSight(targetHead)
+	return targetHead and targetHead.Parent and isAlive(targetHead.Parent) and hasLineOfSight(targetHead)
 end
 
 local function stopCameraLock()
@@ -132,32 +105,21 @@ local function stopCameraLock()
 end
 
 local function startCameraLock()
-	RunService:BindToRenderStep(
-		LOCK_BIND_NAME,
-		Enum.RenderPriority.Camera.Value + 1,
-		function()
-			if not holdingM2 then
-				return
-			end
-
-			if not validTarget(currentTarget) then
-				currentTarget = findBestTarget()
-			end
-
-			if currentTarget then
-				local cameraPosition = camera.CFrame.Position
-				local desiredCFrame = CFrame.lookAt(
-					cameraPosition,
-					currentTarget.Position
-				)
-
-				camera.CFrame = camera.CFrame:Lerp(
-					desiredCFrame,
-					CAMERA_SMOOTHNESS
-				)
-			end
+	RunService:BindToRenderStep(LOCK_BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function()
+		if not holdingM2 then
+			return
 		end
-	)
+
+		if not validTarget(currentTarget) then
+			currentTarget = findBestTarget()
+		end
+
+		if currentTarget then
+			local cameraPosition = camera.CFrame.Position
+			local desiredCFrame = CFrame.lookAt(cameraPosition, currentTarget.Position)
+			camera.CFrame = camera.CFrame:Lerp(desiredCFrame, CAMERA_SMOOTHNESS)
+		end
+	end)
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
