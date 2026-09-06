@@ -7,7 +7,6 @@ local camera = workspace.CurrentCamera
 
 local FOV_RADIUS = 999
 local CAMERA_SMOOTHNESS = 1
-local REQUIRE_LINE_OF_SIGHT = true
 local LOCK_BIND_NAME = "LockOnCamera"
 
 local holdingM2 = false
@@ -50,21 +49,6 @@ local function isAlive(character)
 	return humanoid and humanoid.Health > 0
 end
 
-local function hasLineOfSight(targetHead)
-	if not REQUIRE_LINE_OF_SIGHT then
-		return true
-	end
-
-	local origin = camera.CFrame.Position
-	local direction = targetHead.Position - origin
-
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {localPlayer.Character, targetHead.Parent}
-
-	return workspace:Raycast(origin, direction, raycastParams) == nil
-end
-
 local function findBestTarget()
 	local viewportSize = camera.ViewportSize
 	local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
@@ -84,7 +68,7 @@ local function findBestTarget()
 					local targetScreenPosition = Vector2.new(screenPosition.X, screenPosition.Y)
 					local distanceFromCenter = (targetScreenPosition - screenCenter).Magnitude
 
-					if distanceFromCenter <= FOV_RADIUS and distanceFromCenter < bestScreenDistance and hasLineOfSight(head) then
+					if distanceFromCenter <= FOV_RADIUS and distanceFromCenter < bestScreenDistance then
 						bestScreenDistance = distanceFromCenter
 						bestTarget = head
 					end
@@ -97,7 +81,7 @@ local function findBestTarget()
 end
 
 local function validTarget(targetHead)
-	return targetHead and targetHead.Parent and isAlive(targetHead.Parent) and hasLineOfSight(targetHead)
+	return targetHead and targetHead.Parent and isAlive(targetHead.Parent)
 end
 
 local function stopCameraLock()
