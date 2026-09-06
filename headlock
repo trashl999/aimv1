@@ -6,7 +6,7 @@ local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 local FOV_RADIUS = 999
-local CAMERA_SMOOTHNESS = 0.15
+local CAMERA_SMOOTHNESS = 1
 local REQUIRE_LINE_OF_SIGHT = true
 local LOCK_BIND_NAME = "LockOnCamera"
 
